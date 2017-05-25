@@ -829,14 +829,11 @@ class Network(util.DaemonThread):
                 next_height = (interface.bad + interface.good) // 2
         elif interface.mode == 'default':
             if can_connect:
-                if height > self.get_local_height():
-                    self.blockchain.save_header(header)
-                    self.notify('updated')
-                if height < interface.tip:
-                    next_height = height + 1
-                else:
-                    next_height = None
+                self.blockchain.save_header(header)
+                self.notify('updated')
+                next_height = height + 1 if height < interface.tip else None
             else:
+                interface.print_error("cannot connect %d"% height)
                 interface.mode = 'backward'
                 interface.bad = height
                 next_height = height - 1
@@ -847,9 +844,8 @@ class Network(util.DaemonThread):
             if interface.mode != 'default':
                 self.request_header(interface, next_height)
             else:
-                local_height = self.get_local_height()
-                if interface.tip > local_height + 50:
-                    self.request_chunk(interface, (local_height + 1) // 2016)
+                if interface.tip > next_height + 50:
+                    self.request_chunk(interface, next_height // 2016)
                 else:
                     self.request_header(interface, next_height)
         else:
