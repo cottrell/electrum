@@ -80,7 +80,9 @@ class ElectrumWindow(App):
     num_nodes = NumericProperty(0)
     server_host = StringProperty('')
     server_port = StringProperty('')
+    num_chains = NumericProperty(0)
     blockchain_name = StringProperty('')
+    blockchain_checkpoint = NumericProperty(0)
 
     auto_connect = BooleanProperty(False)
     def on_auto_connect(self, instance, x):
@@ -103,12 +105,13 @@ class ElectrumWindow(App):
 
     def choose_blockchain_dialog(self, dt):
         from uix.dialogs.choice_dialog import ChoiceDialog
+        chains = self.network.get_blockchains()
         def cb(name):
             for index, b in self.network.blockchains.items():
                 if name == self.network.get_blockchain_name(b):
                     self.network.follow_chain(index)
                     #self.block
-        names = [self.network.get_blockchain_name(b) for b in self.network.blockchains.values()]
+        names = [self.network.blockchains[b].get_name() for b in chains]
         if len(names) >1:
             ChoiceDialog(_('Choose your chain'), names, '', cb).open()
 
@@ -265,6 +268,7 @@ class ElectrumWindow(App):
         self._trigger_update_wallet = Clock.create_trigger(self.update_wallet, .5)
         self._trigger_update_status = Clock.create_trigger(self.update_status, .5)
         self._trigger_update_history = Clock.create_trigger(self.update_history, .5)
+        self._trigger_update_interfaces = Clock.create_trigger(self.update_interfaces, .5)
         # cached dialogs
         self._settings_dialog = None
         self._password_dialog = None
@@ -586,32 +590,24 @@ class ElectrumWindow(App):
 
         # connect callbacks
         if self.network:
-            interests = ['updated', 'status', 'new_transaction', 'verified']
-            self.network.register_callback(self.on_network, interests)
+            interests = ['updated', 'status', 'new_transaction', 'verified', 'interfaces']
+            self.network.register_callback(self.on_network_event, interests)
         self.tabs = self.root.ids['tabs']
 
-    def blockchain_status(self):
-        if len(self.network.blockchains)>1:
-            msg = self.network.get_blockchain_name(self.network.blockchain())
-        else:
-            msg = _('Genesis')
-        return msg
-
-    def blockchain_info(self):
-        if len(self.network.blockchains)>1:
-            checkpoint = self.network.get_checkpoint()
-            msg = _('Fork detected at block %d')%checkpoint
-        else:
-            msg = _('The blockchain appears to be one')
-        return msg
-
-    def on_network(self, event, *args):
-        self.blockchain_name = self.blockchain_status()
+    def update_interfaces(self, dt):
+        self.num_nodes = len(self.network.get_interfaces())
+        self.num_chains = len(self.network.get_blockchains())
+        chain = self.network.blockchain()
+        self.blockchain_checkpoint = chain.get_checkpoint()
+        self.blockchain_name = chain.get_name()
         if self.network.interface:
             self.server_host = self.network.interface.host
-        if event == 'updated':
-            self.num_blocks = self.network.get_local_height()
-            self.num_nodes = len(self.network.get_interfaces())
+
+    def on_network_event(self, event, *args):
+        Logger.info('network event: '+ event)
+        if event == 'interfaces':
+            self._trigger_update_interfaces()
+        elif event == 'updated':
             self._trigger_update_wallet()
             self._trigger_update_status()
         elif event == 'status':
@@ -633,6 +629,7 @@ class ElectrumWindow(App):
         run_hook('load_wallet', wallet, self)
 
     def update_status(self, *dt):
+        self.num_blocks = self.network.get_local_height()
         if not self.wallet:
             self.status = _("No Wallet")
             return
