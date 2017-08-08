@@ -774,6 +774,7 @@ class Network(util.DaemonThread):
         connect = interface.blockchain.connect_chunk(index, result)
         # If not finished, get the next chunk
         if not connect:
+            self.connection_down(interface.server)
             return
         if interface.blockchain.height() < interface.tip:
             self.request_chunk(interface, index+1)
@@ -830,6 +831,9 @@ class Network(util.DaemonThread):
                 interface.bad_header = header
             if interface.bad != interface.good + 1:
                 next_height = (interface.bad + interface.good) // 2
+            elif not interface.blockchain.can_connect(interface.bad_header, check_height=False):
+                self.connection_down(interface.server)
+                next_height = None
             else:
                 branch = self.blockchains.get(interface.bad)
                 if branch is not None:
@@ -842,7 +846,7 @@ class Network(util.DaemonThread):
                         next_height = None
                     else:
                         interface.print_error('checkpoint conflicts with existing fork', branch.path())
-                        open(branch.path(), 'w+').close()
+                        branch.write('', 0)
                         branch.save_header(interface.bad_header)
                         interface.mode = 'catch_up'
                         interface.blockchain = branch
@@ -853,14 +857,13 @@ class Network(util.DaemonThread):
                     next_height = None
                     if bh > interface.good:
                         if not interface.blockchain.check_header(interface.bad_header):
-                            if interface.blockchain.can_connect(interface.bad_header, check_height=False):
-                                b = interface.blockchain.fork(interface.bad_header)
-                                self.blockchains[interface.bad] = b
-                                interface.blockchain = b
-                                interface.print_error("new chain", b.checkpoint)
-                                interface.mode = 'catch_up'
-                                next_height = interface.bad + 1
-                                interface.blockchain.catch_up = interface.server
+                            b = interface.blockchain.fork(interface.bad_header)
+                            self.blockchains[interface.bad] = b
+                            interface.blockchain = b
+                            interface.print_error("new chain", b.checkpoint)
+                            interface.mode = 'catch_up'
+                            next_height = interface.bad + 1
+                            interface.blockchain.catch_up = interface.server
                     else:
                         assert bh == interface.good
                         if interface.blockchain.catch_up is None and bh < interface.tip:
@@ -944,10 +947,11 @@ class Network(util.DaemonThread):
             self.process_responses(interface)
 
     def init_headers_file(self):
-        filename = self.blockchains[0].path()
-        if os.path.exists(filename):
+        b = self.blockchains[0]
+        if b.get_hash(0) == bitcoin.GENESIS:
             self.downloading_headers = False
             return
+        filename = b.path()
         def download_thread():
             try:
                 import urllib, socket
@@ -959,6 +963,8 @@ class Network(util.DaemonThread):
             except Exception:
                 self.print_error("download failed. creating file", filename)
                 open(filename, 'wb+').close()
+            b = self.blockchains[0]
+            with b.lock: b.update_size()
             self.downloading_headers = False
         self.downloading_headers = True
         t = threading.Thread(target = download_thread)
